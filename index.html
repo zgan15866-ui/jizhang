@@ -37,6 +37,9 @@
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
   .chips button{border:1px solid var(--line);background:none;color:var(--ink);padding:8px 14px;border-radius:999px;font-size:15px}
   .chips button.on{background:var(--accent);color:var(--card);border-color:var(--accent)}
+  .chips.small{margin-top:-4px;padding-left:10px;border-left:2px solid var(--line)}
+  .chips.small button{padding:6px 12px;font-size:14px}
+  .subline{font-size:13px;color:var(--muted);margin-top:4px}
   .row{display:flex;gap:10px;margin-bottom:14px}
   .row input{flex:1;min-width:0;border:1px solid var(--line);background:none;color:var(--ink);border-radius:10px;padding:10px;font-size:16px}
   .primary{width:100%;border:0;background:var(--accent);color:var(--card);font-size:17px;font-weight:600;padding:14px;border-radius:12px}
@@ -94,6 +97,7 @@
       </div>
       <div class="amount"><span class="cur">¥</span><input id="amt" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>
       <div class="chips" id="cats"></div>
+      <div class="chips small" id="subs" hidden></div>
       <div class="row">
         <input id="date" type="date">
         <input id="note" placeholder="备注（可不填）" maxlength="40">
@@ -202,20 +206,33 @@
   function WEEK(d){ return "日一二三四五六"[new Date(d+"T00:00:00").getDay()]; }
 
   // ---------- 记一笔 ----------
-  var curType="out", curCat=CATS.out[0];
+  // 细分：餐饮下可选早餐/午餐/晚餐（按当前时间自动预选，可点掉不选）
+  var SUBS = {"餐饮":["早餐","午餐","晚餐"]};
+  function autoSub(){ var h=new Date().getHours(); return h<10?"早餐":(h<15?"午餐":"晚餐"); }
+  var curType="out", curCat=CATS.out[0], curSub=SUBS[curCat]?autoSub():"";
+  function setCat(c){ curCat=c; curSub=(curType==="out"&&SUBS[c])?autoSub():""; renderCats(); }
   function renderCats(){
     $("cats").innerHTML = CATS[curType].map(function(c){
       return '<button data-c="'+c+'" class="'+(c===curCat?"on":"")+'">'+c+'</button>';
     }).join("");
+    var s = curType==="out" && SUBS[curCat];
+    $("subs").hidden = !s;
+    $("subs").innerHTML = s ? s.map(function(x){
+      return '<button data-s="'+x+'" class="'+(x===curSub?"on":"")+'">'+x+'</button>';
+    }).join("") : "";
   }
   $("typeSeg").addEventListener("click",function(e){
     var b=e.target.closest("button"); if(!b) return;
-    curType=b.dataset.t; curCat=CATS[curType][0];
+    curType=b.dataset.t;
     [].forEach.call(this.children,function(x){ x.className = x===b ? "on "+curType : ""; });
-    renderCats();
+    setCat(CATS[curType][0]);
   });
   $("cats").addEventListener("click",function(e){
-    var b=e.target.closest("button"); if(!b) return; curCat=b.dataset.c; renderCats();
+    var b=e.target.closest("button"); if(!b) return; setCat(b.dataset.c);
+  });
+  $("subs").addEventListener("click",function(e){
+    var b=e.target.closest("button"); if(!b) return;
+    curSub = curSub===b.dataset.s ? "" : b.dataset.s; renderCats();
   });
   $("amt").addEventListener("input",function(){
     var v=this.value.replace(/[^\d.]/g,""); var p=v.split(".");
@@ -227,9 +244,12 @@
     var cents=Math.round(parseFloat($("amt").value)*100);
     if(!cents||cents<=0){ toast("请输入金额"); $("amt").focus(); return; }
     var date=$("date").value||todayStr();
-    db.items.push({id:uid(),type:curType,amt:cents,cat:curCat,date:date,note:$("note").value.trim(),ts:Date.now()});
+    var rec={id:uid(),type:curType,amt:cents,cat:curCat,date:date,note:$("note").value.trim(),ts:Date.now()};
+    if(curSub && SUBS[curCat]) rec.sub=curSub;
+    db.items.push(rec);
     if(!persist()){ db.items.pop(); return; }
     $("amt").value=""; $("note").value="";
+    if(SUBS[curCat] && curType==="out"){ curSub=autoSub(); renderCats(); }
     toast((curType==="out"?"支出 ":"收入 ")+money(cents)+" 已记");
     renderRecent();
   });
@@ -239,7 +259,7 @@
     var html="", last="";
     sorted(items).forEach(function(i){
       if(withDays && i.date!==last){ last=i.date; html+='<div class="daylabel">'+i.date.slice(5).replace("-","月")+'日 周'+WEEK(i.date)+'</div>'; }
-      html+='<div class="item"><div class="grow"><div class="cat">'+esc(i.cat)+'</div>'+
+      html+='<div class="item"><div class="grow"><div class="cat">'+esc(i.cat)+(i.sub?' · '+esc(i.sub):'')+'</div>'+
         (i.note?'<div class="meta">'+esc(i.note)+'</div>':'')+'</div>'+
         '<div class="num '+(i.type==="out"?"out-c":"in-c")+'">'+(i.type==="out"?"-":"+")+money(i.amt)+'</div>'+
         '<button class="del" data-id="'+i.id+'" aria-label="删除">×</button></div>';
@@ -275,8 +295,13 @@
     var color= type==="out"?"var(--out)":"var(--in)";
     return keys.map(function(k){
       var pct=total?Math.round(by[k]/total*100):0;
+      // 有细分时（如餐饮的早/午/晚），在条形下面列出各项金额
+      var bs={}, has=false;
+      items.forEach(function(i){ if(i.type===type && i.cat===k){ var s=i.sub||"未细分"; bs[s]=(bs[s]||0)+i.amt; if(i.sub) has=true; } });
+      var order=(SUBS[k]||[]).concat(["未细分"]);
+      var subline = has ? '<div class="subline">'+order.filter(function(s){return bs[s];}).map(function(s){return esc(s)+' '+money(bs[s]);}).join(" · ")+'</div>' : '';
       return '<div class="bar"><div class="top"><span>'+esc(k)+' <span class="sub">'+pct+'%</span></span><span class="num">'+money(by[k])+'</span></div>'+
-        '<div class="track"><div class="fill" style="width:'+pct+'%;background:'+color+'"></div></div></div>';
+        '<div class="track"><div class="fill" style="width:'+pct+'%;background:'+color+'"></div></div>'+subline+'</div>';
     }).join("");
   }
   function renderMonth(){
@@ -326,7 +351,7 @@
   $("exportCsv").onclick=function(){
     var lines=["日期,类型,分类,金额,备注"];
     sorted(db.items).reverse().forEach(function(i){
-      lines.push([i.date, i.type==="out"?"支出":"收入", i.cat, (i.amt/100).toFixed(2), '"'+String(i.note||"").replace(/"/g,'""')+'"'].join(","));
+      lines.push([i.date, i.type==="out"?"支出":"收入", i.cat+(i.sub?"-"+i.sub:""), (i.amt/100).toFixed(2), '"'+String(i.note||"").replace(/"/g,'""')+'"'].join(","));
     });
     shareOrDownload("记账明细-"+todayStr()+".csv", "﻿"+lines.join("\n"), "text/csv");
   };
@@ -342,7 +367,9 @@
         var added=0;
         d.items.forEach(function(i){
           if(i && i.id && !have[i.id] && (i.type==="in"||i.type==="out") && typeof i.amt==="number" && /^\d{4}-\d{2}-\d{2}$/.test(i.date)){
-            db.items.push({id:i.id,type:i.type,amt:Math.round(i.amt),cat:String(i.cat||"其他"),date:i.date,note:String(i.note||""),ts:i.ts||0}); added++;
+            var rec={id:i.id,type:i.type,amt:Math.round(i.amt),cat:String(i.cat||"其他"),date:i.date,note:String(i.note||""),ts:i.ts||0};
+            if(i.sub) rec.sub=String(i.sub);
+            db.items.push(rec); added++;
           }
         });
         persist(); toast("已恢复 "+added+" 条记录"); refresh();
