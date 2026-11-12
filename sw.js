@@ -1,5 +1,5 @@
 // 离线缓存：第一次打开后，没网也能用
-const CACHE = "jizhang-v1";
+const CACHE = "jizhang-v2";
 const FILES = ["./", "./index.html", "./manifest.json", "./icon-180.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {
